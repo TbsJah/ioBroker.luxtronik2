@@ -19,6 +19,19 @@ Connects to Luxtronik 2 heatpump controllers over LAN and WebSocket
 
 ## Changelog
 
+### 0.1.1
+
+-   (UncleSamSwiss) Updated to the latest luxtronik2 dependency.
+
+### 0.1.0
+
+-   (UncleSamSwiss) Initial version on NPM
+-   (UncleSamSwiss) Added latest dependencies.
+
+### 0.0.2
+
+-   (UncleSamSwiss) Added support for the Luxtronik protocol, this now allows you to set target temperatures.
+
 ### 0.0.1
 
 -   (UncleSamSwiss) initial release

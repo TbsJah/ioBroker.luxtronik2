@@ -1,8 +1,44 @@
 {
     "common": {
         "name": "luxtronik2",
-        "version": "0.0.1",
+        "version": "0.1.1",
         "news": {
+            "0.1.1": {
+                "en": "Updated to the latest luxtronik2 dependency",
+                "de": "Auf die neueste luxtronik2-Abhängigkeit aktualisiert",
+                "ru": "Обновлен до последней зависимости luxtronik2",
+                "pt": "Atualizado para a dependência luxtronik2 mais recente",
+                "nl": "Bijgewerkt naar de nieuwste luxtronik2-afhankelijkheid",
+                "fr": "Mise à jour vers la dernière dépendance luxtronik2",
+                "it": "Aggiornato all'ultima dipendenza luxtronik2",
+                "es": "Actualizado a la última dependencia de luxtronik2",
+                "pl": "Zaktualizowano do najnowszej zależności luxtronik2",
+                "zh-cn": "更新到最新的luxtronik2依赖项"
+            },
+            "0.1.0": {
+                "en": "Initial version on NPM containing the latest dependencies",
+                "de": "Erste Version auf NPM mit den neuesten Abhängigkeiten",
+                "ru": "Первоначальная версия на NPM, содержащая последние зависимости",
+                "pt": "Versão inicial no NPM contendo as dependências mais recentes",
+                "nl": "Eerste versie op NPM met de nieuwste afhankelijkheden",
+                "fr": "Version initiale sur NPM contenant les dernières dépendances",
+                "it": "Versione iniziale su NPM contenente le ultime dipendenze",
+                "es": "Versión inicial en NPM que contiene las dependencias más recientes",
+                "pl": "Początkowa wersja na NPM zawierająca najnowsze zależności",
+                "zh-cn": "NPM的初始版本包含最新的依赖项"
+            },
+            "0.0.2": {
+                "en": "Added support for the Luxtronik protocol",
+                "de": "Unterstützung für das Luxtronik-Protokoll hinzugefügt",
+                "ru": "Добавлена ​​поддержка протокола Luxtronik.",
+                "pt": "Adicionado suporte para o protocolo Luxtronik",
+                "nl": "Ondersteuning toegevoegd voor het Luxtronik-protocol",
+                "fr": "Ajout de la prise en charge du protocole Luxtronik",
+                "it": "Aggiunto supporto per il protocollo Luxtronik",
+                "es": "Soporte agregado para el protocolo Luxtronik",
+                "pl": "Dodano obsługę protokołu Luxtronik",
+                "zh-cn": "增加了对Luxtronik协议的支持"
+            },
             "0.0.1": {
                 "en": "initial release",
                 "de": "Erstveröffentlichung",
@@ -41,8 +77,14 @@
             "pl": "Łączy się ze sterownikami pompy ciepła Luxtronik 2 przez LAN i WebSocket",
             "zh-cn": "通过LAN和WebSocket连接到Luxtronik 2热泵控制器"
         },
-        "authors": ["UncleSamSwiss <samuel.weibel@gmail.com>"],
-        "keywords": ["heatpump", "websocket", "luxtronik"],
+        "authors": [
+            "UncleSamSwiss <samuel.weibel@gmail.com>"
+        ],
+        "keywords": [
+            "heatpump",
+            "websocket",
+            "luxtronik"
+        ],
         "license": "Apache-2.0",
         "platform": "Javascript/Node.js",
         "main": "build/main.js",
@@ -63,11 +105,16 @@
             }
         ]
     },
-    "encryptedNative": ["password"],
-    "protectedNative": ["password"],
+    "encryptedNative": [
+        "password"
+    ],
+    "protectedNative": [
+        "password"
+    ],
     "native": {
         "host": "127.0.0.1",
         "port": 8214,
+        "luxPort": 8888,
         "password": "",
         "refreshInterval": 5
     },

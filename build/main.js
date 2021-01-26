@@ -1,7 +1,4 @@
 "use strict";
-/*
- * Created with @iobroker/create-adapter v1.30.1
- */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
@@ -25,13 +22,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-// The adapter-core module gives you access to the core ioBroker functions
-// you need to create an adapter
+/*
+ * Created with @iobroker/create-adapter v1.30.1
+ */
 const utils = __importStar(require("@iobroker/adapter-core"));
+const luxtronik2_1 = __importDefault(require("luxtronik2"));
+const net_1 = require("net");
 const ws_1 = __importDefault(require("ws"));
 const xml2js_1 = require("xml2js");
-// Load your modules here, e.g.:
-// import * as fs from "fs";
+const lux_meta_1 = require("./lux-meta");
 class Luxtronik2 extends utils.Adapter {
     constructor(options = {}) {
         super({
@@ -47,8 +46,6 @@ class Luxtronik2 extends utils.Adapter {
         this.isSaving = false;
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
-        // this.on('objectChange', this.onObjectChange.bind(this));
-        // this.on('message', this.onMessage.bind(this));
         this.on('unload', this.onUnload.bind(this));
     }
     /**
@@ -58,125 +55,263 @@ class Luxtronik2 extends utils.Adapter {
         // Initialize your adapter here
         // Reset the connection indicator during startup
         this.setState('info.connection', false, true);
-        const uri = 'ws://' + this.config.host + ':' + this.config.port;
-        const login = 'LOGIN;' + this.config.password;
-        this.ws = new ws_1.default(uri, 'Lux_WS');
-        this.ws.on('open', () => {
+        this.createWebSocket();
+        if (this.config.useLuxProxy) {
+            await this.createLuxTreeAsync();
+            this.createLuxtronikProxy();
+        }
+        else if (this.config.luxPort) {
+            await this.createLuxTreeAsync();
+            this.createLuxtronikConnection(this.config.host, this.config.luxPort);
+        }
+    }
+    createWebSocket() {
+        if (!this.config.port) {
+            return;
+        }
+        const uri = `ws://${this.config.host}:${this.config.port}`;
+        const login = `LOGIN;${this.config.password}`;
+        this.webSocket = new ws_1.default(uri, 'Lux_WS');
+        this.log.info('Connecting to ' + uri);
+        this.webSocket.on('open', () => {
+            var _a, _b, _c;
             try {
                 this.log.info('Connected to ' + uri);
-                this.ws.send(login);
-                this.ws.send('REFRESH');
+                (_a = this.webSocket) === null || _a === void 0 ? void 0 : _a.send(login);
+                (_b = this.webSocket) === null || _b === void 0 ? void 0 : _b.send('REFRESH');
                 this.setState('info.connection', true, true);
             }
             catch (e) {
-                this.ws.close();
+                this.log.error(`Couldn't send login, ${e}`);
+                (_c = this.webSocket) === null || _c === void 0 ? void 0 : _c.close();
             }
         });
-        this.ws.on('message', (msg) => this.handleWsMessage(msg));
-        this.ws.on('error', (err) => {
+        this.webSocket.on('message', (msg) => this.handleWsMessage(msg));
+        this.webSocket.on('error', (err) => {
+            if (this.closing) {
+                return;
+            }
             this.log.error(`Got WebSocket error ${err}`);
-            this.restart();
+            // not available in unit tests
+            if (this.restart) {
+                this.restart();
+            }
         });
-        this.ws.on('close', () => {
+        this.webSocket.on('close', () => {
+            if (this.closing) {
+                return;
+            }
             this.log.error('Got unexpected close event');
-            this.restart();
+            // not available in unit tests
+            if (this.restart) {
+                this.restart();
+            }
         });
-        /*
-        // The adapters config (in the instance object everything under the attribute "native") is accessible via
-        // this.config:
-        this.log.info('config option1: ' + this.config.option1);
-        this.log.info('config option2: ' + this.config.option2);
-
-        /*
-        For every state in the system there has to be also an object of type state
-        Here a simple template for a boolean variable named "testVariable"
-        Because every adapter instance uses its own unique namespace variable names can't collide with other adapters variables
-        * /
-        await this.setObjectNotExistsAsync('testVariable', {
-            type: 'state',
-            common: {
-                name: 'testVariable',
-                type: 'boolean',
-                role: 'indicator',
-                read: true,
-                write: true,
-            },
-            native: {},
+    }
+    async createLuxTreeAsync() {
+        for (const sectionName in lux_meta_1.luxMeta) {
+            const section = lux_meta_1.luxMeta[sectionName];
+            await this.extendObjectAsync(sectionName, {
+                type: 'channel',
+                common: {
+                    name: sectionName,
+                },
+            });
+            for (const itemName in section) {
+                const item = section[itemName];
+                const id = `${sectionName}.${itemName}`;
+                await this.extendObjectAsync(id, {
+                    type: 'state',
+                    common: {
+                        name: itemName,
+                        read: true,
+                        write: !!item.writeName,
+                        type: item.type,
+                        role: item.role,
+                        unit: item.unit,
+                        min: item.min,
+                        max: item.max,
+                        states: item.states,
+                    },
+                });
+                if (item.writeName) {
+                    this.subscribeStates(id);
+                }
+            }
+        }
+    }
+    createLuxtronikConnection(host, port) {
+        if (!port) {
+            return;
+        }
+        this.log.info(`Connecting to ${host}:${port}`);
+        this.luxtronik = new luxtronik2_1.default.createConnection(host, port);
+        this.requestLuxtronikData();
+    }
+    requestLuxtronikData() {
+        this.luxtronik.read((err, data) => {
+            if (err) {
+                if (err && err.message === 'heatpump busy') {
+                    this.log.info('Heatpump busy, will retry later');
+                }
+                else {
+                    this.log.error(`Luxtronik read error, will retry later: ${err}`);
+                }
+                this.luxRefreshTimeout = setTimeout(() => this.requestLuxtronikData(), this.config.refreshInterval * 1000);
+                return;
+            }
+            this.setState('info.connection', true, true);
+            this.handleLuxtronikDataAsync(data).catch((e) => this.log.error(`Couldn't handle luxtronik data ${e}`));
         });
-
-        // In order to get state updates, you need to subscribe to them. The following line adds a subscription for our variable we have created above.
-        this.subscribeStates('testVariable');
-        // You can also add a subscription for multiple states. The following line watches all states starting with "lights."
-        // this.subscribeStates('lights.*');
-        // Or, if you really must, you can also watch all states. Don't do this if you don't need to. Otherwise this will cause a lot of unnecessary load on the system:
-        // this.subscribeStates('*');
-
-        /*
-            setState examples
-            you will notice that each setState will cause the stateChange event to fire (because of above subscribeStates cmd)
-        * /
-        // the variable testVariable is set to true as command (ack=false)
-        await this.setStateAsync('testVariable', true);
-
-        // same thing, but the value is flagged "ack"
-        // ack should be always set to true if the value is received from or acknowledged from the target system
-        await this.setStateAsync('testVariable', { val: true, ack: true });
-
-        // same thing, but the state is deleted after 30s (getState will return null afterwards)
-        await this.setStateAsync('testVariable', { val: true, ack: true, expire: 30 });
-
-        // examples for the checkPassword/checkGroup functions
-        let result = await this.checkPasswordAsync('admin', 'iobroker');
-        this.log.info('check user admin pw iobroker: ' + result);
-
-        result = await this.checkGroupAsync('admin', 'admin');
-        this.log.info('check group user admin group admin: ' + result);*/
+    }
+    /**
+     * Creates a TCP proxy for the Luxtronik port.
+     * This is required in some instances because the underlying library expects
+     * all data to arrive in a single batch (which it sometimes doesn't).
+     */
+    createLuxtronikProxy() {
+        const localhost = '127.0.0.1';
+        this.proxyServer = net_1.createServer((client) => {
+            this.log.debug('Received proxy connect');
+            const forward = net_1.createConnection(this.config.luxPort, this.config.host);
+            client.on('close', () => {
+                forward.end();
+                this.log.debug('Client closed proxy connection');
+            });
+            forward.on('close', () => {
+                client.end();
+                this.log.debug('Luxtronik closed proxy connection');
+            });
+            client.on('data', (data) => {
+                this.log.silly(`Received ${data.length} bytes from client`);
+                forward.write(data);
+            });
+            let receiveBuffer;
+            let receiveTimeout;
+            forward.on('data', (data) => {
+                this.log.silly(`Received ${data.length} bytes from Luxtronik`);
+                if (receiveTimeout) {
+                    clearTimeout(receiveTimeout);
+                }
+                if (receiveBuffer) {
+                    receiveBuffer = Buffer.concat([receiveBuffer, data]);
+                }
+                else {
+                    receiveBuffer = Buffer.from(data);
+                }
+                receiveTimeout = setTimeout(() => {
+                    if (receiveBuffer) {
+                        this.log.silly(`Sending ${receiveBuffer.length} bytes to client`);
+                        client.write(receiveBuffer);
+                        receiveBuffer = undefined;
+                    }
+                }, 100);
+            });
+        });
+        this.proxyServer.on('listening', () => {
+            var _a;
+            const port = ((_a = this.proxyServer) === null || _a === void 0 ? void 0 : _a.address()).port;
+            this.log.info(`Proxy listening on port ${port}`);
+            this.createLuxtronikConnection(localhost, port);
+        });
+        this.proxyServer.listen(undefined, localhost);
     }
     /**
      * Is called when adapter shuts down - callback has to be called under any circumstances!
      */
     onUnload(callback) {
+        var _a, _b;
         try {
             this.closing = true;
-            if (this.refreshTimeout) {
-                clearTimeout(this.refreshTimeout);
+            if (this.wsRefreshTimeout) {
+                clearTimeout(this.wsRefreshTimeout);
             }
-            this.ws.close();
+            if (this.luxRefreshTimeout) {
+                clearTimeout(this.luxRefreshTimeout);
+            }
+            (_a = this.webSocket) === null || _a === void 0 ? void 0 : _a.close();
+            (_b = this.proxyServer) === null || _b === void 0 ? void 0 : _b.close();
             callback();
         }
         catch (e) {
             callback();
         }
     }
-    // If you need to react to object changes, uncomment the following block and the corresponding line in the constructor.
-    // You also need to subscribe to the objects with `this.subscribeObjects`, similar to `this.subscribeStates`.
-    // /**
-    //  * Is called if a subscribed object changes
-    //  */
-    // private onObjectChange(id: string, obj: ioBroker.Object | null | undefined): void {
-    //     if (obj) {
-    //         // The object was changed
-    //         this.log.info(`object ${id} changed: ${JSON.stringify(obj)}`);
-    //     } else {
-    //         // The object was deleted
-    //         this.log.info(`object ${id} deleted`);
-    //     }
-    // }
     /**
      * Is called if a subscribed state changes
      */
     onStateChange(id, state) {
+        var _a;
         if (!state || state.ack) {
             return;
         }
         // The state was changed from the outside
-        this.log.debug(`state ${id} changed: ${state.val}`);
+        this.log.debug(`state ${id} changed: ${JSON.stringify(state.val)}`);
         const idParts = id.split('.');
         idParts.shift(); // remove adapter name
         idParts.shift(); // remove instance number
+        const luxSection = lux_meta_1.luxMeta[idParts[0]];
+        if (luxSection && luxSection[idParts[1]]) {
+            const meta = luxSection[idParts[1]];
+            if (!meta.writeName) {
+                return;
+            }
+            if (this.luxRefreshTimeout) {
+                clearTimeout(this.luxRefreshTimeout);
+            }
+            this.log.debug(`Setting ${meta.writeName} to ${state.val}`);
+            (_a = this.luxtronik) === null || _a === void 0 ? void 0 : _a.write(meta.writeName, state.val, (err, _result) => {
+                if (err) {
+                    this.log.error(`Coudln't set ${id}: ${err}`);
+                }
+                this.requestLuxtronikData();
+            });
+            return;
+        }
         this.requestedUpdates.push({ id: idParts.join('.'), value: state.val });
         if (this.requestedUpdates.length === 1) {
             this.handleNextUpdate();
+        }
+    }
+    async handleLuxtronikDataAsync(data) {
+        try {
+            for (const sectionName in data) {
+                if (!lux_meta_1.luxMeta[sectionName]) {
+                    continue;
+                }
+                const section = data[sectionName];
+                for (const itemName in section) {
+                    const meta = lux_meta_1.luxMeta[sectionName][itemName];
+                    if (!meta) {
+                        continue;
+                    }
+                    const value = section[itemName];
+                    let stateValue;
+                    if (meta.type === 'number') {
+                        stateValue = value === 'no' ? undefined : value;
+                    }
+                    else if (meta.type === 'boolean') {
+                        switch (value) {
+                            case 'on':
+                                stateValue = true;
+                                break;
+                            case 'off':
+                                stateValue = false;
+                                break;
+                            default:
+                                stateValue = undefined;
+                                break;
+                        }
+                    }
+                    else {
+                        stateValue = value;
+                    }
+                    await this.setStateValueAsync(`${sectionName}.${itemName}`, stateValue);
+                }
+            }
+        }
+        finally {
+            this.luxRefreshTimeout = setTimeout(() => this.requestLuxtronikData(), this.config.refreshInterval * 1000);
         }
     }
     handleNextUpdate() {
@@ -192,8 +327,8 @@ class Luxtronik2 extends utils.Adapter {
             return this.handleNextUpdate();
         }
         // request the section so we have the right id to update
-        if (this.refreshTimeout) {
-            clearTimeout(this.refreshTimeout);
+        if (this.wsRefreshTimeout) {
+            clearTimeout(this.wsRefreshTimeout);
         }
         this.currentNavigationSection = navigationSection - 1;
         this.requestNextContent();
@@ -203,6 +338,7 @@ class Luxtronik2 extends utils.Adapter {
         this.handleWsMessageAsync(message).catch((error) => this.log.error(`Couldn't handle message: ${error} ${error.stack}`));
     }
     async handleWsMessageAsync(msg) {
+        var _a, _b;
         const message = await xml2js_1.parseStringPromise(msg);
         this.log.debug(JSON.stringify(message));
         if ('Navigation' in message) {
@@ -240,6 +376,9 @@ class Luxtronik2 extends utils.Adapter {
             for (let i = 0; i < message.Content.item.length; i++) {
                 const section = message.Content.item[i];
                 const sectionHandler = this.createHandler(section, navigationId, sectionIds, this);
+                if (!sectionHandler) {
+                    continue;
+                }
                 if (!this.handlers[sectionHandler.id]) {
                     this.handlers[sectionHandler.id] = sectionHandler;
                     await sectionHandler.extendObjectAsync();
@@ -247,31 +386,39 @@ class Luxtronik2 extends utils.Adapter {
                 const itemIds = [];
                 for (let j = 0; j < section.item.length; j++) {
                     const item = section.item[j];
-                    const itemHandler = this.createHandler(item, sectionHandler.id, itemIds, this);
-                    if (!this.handlers[itemHandler.id]) {
-                        this.handlers[itemHandler.id] = itemHandler;
-                        this.log.silly(`Creating ${itemHandler.id}`);
-                        await itemHandler.extendObjectAsync();
-                    }
-                    if (this.requestedUpdates.length === 0) {
-                        this.log.silly(`Setting state of ${itemHandler.id}`);
-                        await itemHandler.setStateAsync();
-                    }
-                    else {
-                        const updateIndex = this.requestedUpdates.findIndex((ch) => ch.id === itemHandler.id);
-                        if (updateIndex >= 0) {
-                            const cmd = itemHandler.createSetCommand(this.requestedUpdates[updateIndex].value);
-                            this.log.debug(`Sending ${cmd}`);
-                            this.ws.send(cmd);
-                            this.requestedUpdates.splice(updateIndex);
-                            shouldSave = true;
+                    try {
+                        const itemHandler = this.createHandler(item, sectionHandler.id, itemIds, this);
+                        if (!itemHandler) {
+                            continue;
                         }
+                        if (!this.handlers[itemHandler.id]) {
+                            this.log.silly(`Creating ${itemHandler.id}`);
+                            await itemHandler.extendObjectAsync();
+                            this.handlers[itemHandler.id] = itemHandler;
+                        }
+                        if (this.requestedUpdates.length === 0) {
+                            this.log.silly(`Setting state of ${itemHandler.id}`);
+                            await itemHandler.setStateAsync();
+                        }
+                        else {
+                            const updateIndex = this.requestedUpdates.findIndex((ch) => ch.id === itemHandler.id);
+                            if (updateIndex >= 0) {
+                                const cmd = itemHandler.createSetCommand(this.requestedUpdates[updateIndex].value);
+                                this.log.debug(`Sending ${cmd}`);
+                                (_a = this.webSocket) === null || _a === void 0 ? void 0 : _a.send(cmd);
+                                this.requestedUpdates.splice(updateIndex);
+                                shouldSave = true;
+                            }
+                        }
+                    }
+                    catch (error) {
+                        this.log.error(`Couldn't handle '${sectionHandler.id}' -> '${item.name[0]}': ${error}`);
                     }
                 }
             }
             if (shouldSave) {
                 this.log.debug('Saving');
-                this.ws.send('SAVE;1');
+                (_b = this.webSocket) === null || _b === void 0 ? void 0 : _b.send('SAVE;1');
                 this.isSaving = true;
             }
             else {
@@ -284,20 +431,25 @@ class Luxtronik2 extends utils.Adapter {
         this.requestNextContent();
     }
     requestNextContent() {
+        var _a;
         this.currentNavigationSection++;
         if (this.currentNavigationSection >= this.navigationSections.length) {
-            this.refreshTimeout = setTimeout(() => this.requestAllContent(), this.config.refreshInterval * 1000);
+            this.wsRefreshTimeout = setTimeout(() => this.requestAllContent(), this.config.refreshInterval * 1000);
             return;
         }
         const id = this.navigationSections[this.currentNavigationSection].$.id;
         this.log.debug('Getting ' + id);
-        this.ws.send('GET;' + id);
+        (_a = this.webSocket) === null || _a === void 0 ? void 0 : _a.send('GET;' + id);
     }
     getItemId(item) {
         return item.name[0].replace(/[\][*,;'"`<>\\?/._ \-]+/g, '-').replace(/(^-+|-+$)/g, '');
     }
     createHandler(item, parentId, existingIds, adapter) {
         const baseId = `${parentId}.${this.getItemId(item)}`;
+        if (baseId.endsWith('.')) {
+            // item has no name
+            return undefined;
+        }
         let id = baseId;
         for (let i = 1; existingIds.includes(id); i++) {
             id = `${baseId}_${i}`;
@@ -314,6 +466,18 @@ class Luxtronik2 extends utils.Adapter {
         }
         return new ReadOnlyHandler(id, item, adapter);
     }
+    async setStateValueAsync(id, value) {
+        const currentState = await this.getStateAsync(id);
+        if (value === undefined) {
+            if (currentState) {
+                await this.delStateAsync(id);
+            }
+            return;
+        }
+        if (!currentState || currentState.val !== value || !currentState.ack) {
+            await this.setStateAsync(id, value, true);
+        }
+    }
 }
 class ItemHandler {
     constructor(id, item, adapter) {
@@ -321,27 +485,22 @@ class ItemHandler {
         this.item = item;
         this.adapter = adapter;
     }
-    unit2role(unit) {
+    unit2role(unit, readOnly) {
+        const kind = readOnly ? 'value' : 'level';
         switch (unit) {
             case '°C':
             case 'K':
-                return 'value.temperature';
+                return `${kind}.temperature`;
             case 'bar':
-                return 'value.pressure';
+                return `${kind}.pressure`;
             case 'V':
-                return 'value.voltage';
+                return `${kind}.voltage`;
             case 'kWh':
-                return 'value.power.consumption';
+                return `${kind}.power.consumption`;
             case 'kW':
-                return 'value.power';
+                return `${kind}.power`;
             default:
-                return 'value';
-        }
-    }
-    async setStateValueAsync(value) {
-        const currentState = await this.adapter.getStateAsync(this.id);
-        if (!currentState || currentState.val !== value || !currentState.ack) {
-            await this.adapter.setStateAsync(this.id, value, true);
+                return kind;
         }
     }
 }
@@ -380,7 +539,7 @@ class ReadOnlyHandler extends ItemHandler {
             if (match[3]) {
                 common.unit = match[3];
             }
-            common.role = this.unit2role(common.unit);
+            common.role = this.unit2role(common.unit, true);
         }
         else if (value === 'Ein' || value === 'Aus' || value === 'On' || value === 'Off') {
             common.type = 'boolean';
@@ -403,18 +562,18 @@ class ReadOnlyHandler extends ItemHandler {
             const numberValue = match[1];
             if (numberValue.endsWith('-')) {
                 // something like '---'
-                await this.setStateValueAsync(null);
+                await this.adapter.setStateValueAsync(this.id, undefined);
             }
             else {
-                await this.setStateValueAsync(parseFloat(numberValue));
+                await this.adapter.setStateValueAsync(this.id, parseFloat(numberValue));
             }
         }
         else if (value === 'Ein' || value === 'Aus' || value === 'On' || value === 'Off') {
             const flag = value === 'Ein' || value === 'On';
-            await this.setStateValueAsync(flag);
+            await this.adapter.setStateValueAsync(this.id, flag);
         }
         else {
-            await this.setStateValueAsync(value);
+            await this.adapter.setStateValueAsync(this.id, value);
         }
     }
     createSetCommand(_value) {
@@ -441,7 +600,7 @@ class SelectHandler extends ItemHandler {
     }
     async setStateAsync() {
         const value = this.item.raw[0];
-        await this.setStateValueAsync(value);
+        await this.adapter.setStateValueAsync(this.id, value);
     }
     createSetCommand(value) {
         return `SET;set_${this.item.$.id};${value}`;
@@ -460,7 +619,7 @@ class NumberHandler extends ItemHandler {
                 read: true,
                 write: true,
                 type: 'number',
-                role: this.unit2role(unit),
+                role: this.unit2role(unit, false),
                 unit: unit,
                 min: min / div,
                 max: max / div,
@@ -472,7 +631,7 @@ class NumberHandler extends ItemHandler {
     async setStateAsync() {
         const div = parseInt(this.item.div[0]);
         const raw = parseInt(this.item.raw[0]);
-        await this.setStateValueAsync(raw / div);
+        await this.adapter.setStateValueAsync(this.id, raw / div);
     }
     createSetCommand(value) {
         if (typeof value === 'number') {
